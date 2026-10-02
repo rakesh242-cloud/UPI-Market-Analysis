@@ -1,0 +1,1 @@
+Place the monthly NPCI UPI Apps `.xlsx` workbooks here to rebuild the data. The workbook files are excluded from Git because the official source is [NPCI UPI ecosystem statistics](https://www.npci.org.in/what-we-do/upi/upi-ecosystem-statistics). Preserve filenames ending in `YYYY-Mon.xlsx`.
