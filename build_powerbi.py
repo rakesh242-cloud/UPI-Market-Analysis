@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
 
 ROOT = Path(__file__).resolve().parent
@@ -232,7 +233,13 @@ def main() -> None:
             raise FileNotFoundError(f"Run build.py first: {file_name}")
     build_model()
     build_report()
+    archive = BASE / f"{NAME} - Power BI project.zip"
+    with ZipFile(archive, "w", ZIP_DEFLATED) as bundle:
+        for file in BASE.rglob("*"):
+            if file.is_file() and file != archive:
+                bundle.write(file, file.relative_to(BASE))
     print(f"Built {BASE / (NAME + '.pbip')}")
+    print(f"Packaged {archive}")
     print("Power BI Desktop is required to refresh and visually validate the report.")
 
 

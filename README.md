@@ -21,7 +21,7 @@ The dashboard uses the transaction **volume** reported in the app-level NPCI wor
 | --- | --- |
 | [`docs/index.html`](docs/index.html) | Standalone interactive dashboard for GitHub Pages |
 | [`dashboard/template.html`](dashboard/template.html) | Dashboard source |
-| [`powerbi/Rakesh UPI Market Pulse.pbip`](powerbi/Rakesh%20UPI%20Market%20Pulse.pbip) | Power BI Desktop project with three report pages |
+| [Power BI project download](powerbi/Rakesh%20UPI%20Market%20Pulse%20-%20Power%20BI%20project.zip) | Power BI Desktop project with three report pages; extract the ZIP first |
 | [`data/processed/`](data/processed/) | Clean CSV tables and SQLite database |
 | [`analysis.sql`](analysis.sql) | Reusable analytical queries |
 | [`build.py`](build.py), [`make_dashboard.py`](make_dashboard.py), [`build_powerbi.py`](build_powerbi.py) | Rebuild scripts |
@@ -35,7 +35,7 @@ The dashboard uses the transaction **volume** reported in the app-level NPCI wor
 4. Run `python make_dashboard.py` and `python build_powerbi.py`.
 5. Run `python -m unittest -v test_project.py` to check the output.
 
-The processed data and ready-to-use dashboard are included for readers who just want to explore the results. After moving the project to a different computer, rerun `build_powerbi.py` before opening the `.pbip` file so its CSV paths point to the new location. Open the `.pbip` file in Power BI Desktop and refresh the model.
+The processed data and ready-to-use dashboard are included for readers who just want to explore the results. Extract the Power BI ZIP into the `powerbi` folder. After moving the project to a different computer, rerun `build_powerbi.py` before opening the `.pbip` file so its CSV paths point to the new location. Open the `.pbip` file in Power BI Desktop and refresh the model.
 
 ## Publish the dashboard with GitHub Pages
 
