@@ -2,7 +2,9 @@
 
 An interactive analysis of India's UPI app market by **Rakesh**. The project turns monthly app statistics from the [National Payments Corporation of India (NPCI)](https://www.npci.org.in/what-we-do/upi/upi-ecosystem-statistics) into a browser dashboard, a Power BI project, reusable data tables, and SQL analysis.
 
-**Explore the dashboard:** open [`docs/index.html`](docs/index.html) in a browser. It is a single, self-contained file and also works with GitHub Pages.
+**[Explore the live dashboard](https://rakesh242-cloud.github.io/rakesh-upi-market-pulse/)** · [Dashboard source](docs/index.html)
+
+The dashboard is a single, self-contained file that also opens locally in a browser.
 
 Use the period selector and month slider to change the entire view. Play the timeline, click a chart month, toggle app lines, or click an annual bar to jump to that year. The ranking follows the selected month.
 
