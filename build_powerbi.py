@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import uuid
 from dataclasses import dataclass, field
@@ -74,7 +75,36 @@ DATASETS = (
 )
 
 
-def tmdl(dataset: Dataset, server: str, database: str) -> str:
+def embedded_csv_source(dataset: Dataset) -> list[str]:
+    """Store prepared rows in Power Query so the shared report is portable."""
+    path = ROOT / "data" / "processed" / f"{dataset.sql_table}.csv"
+    with path.open(newline="", encoding="utf-8") as stream:
+        reader = csv.reader(stream)
+        rows = list(reader)
+    if not rows or tuple(rows[0]) != tuple(name for name, _, _ in dataset.columns):
+        raise ValueError(f"Unexpected columns in {path}")
+    if len(rows) < 2:
+        raise ValueError(f"No data rows in {path}")
+    # Keep CSV quoting intact and split only between rows, never inside an M escape.
+    chunks: list[str] = []
+    chunk = ""
+    for line in path.read_text(encoding="utf-8").splitlines(keepends=True):
+        escaped = line.replace('"', '""').replace("\r\n", "#(lf)").replace("\n", "#(lf)")
+        if chunk and len(chunk) + len(escaped) > 8000:
+            chunks.append(chunk)
+            chunk = ""
+        chunk += escaped
+    if chunk:
+        chunks.append(chunk)
+    csv_text = " &\n\t\t\t\t        ".join(f'"{part}"' for part in chunks)
+    return [
+        f"\t\t\t\t    CsvText = {csv_text},",
+        f"\t\t\t\t    Rows = Csv.Document(Text.ToBinary(CsvText), [Delimiter=\",\", Columns={len(dataset.columns)}, Encoding=65001, QuoteStyle=QuoteStyle.Csv]),",
+        "\t\t\t\t    WithHeaders = Table.PromoteHeaders(Rows, [PromoteAllScalars=true]),",
+    ]
+
+
+def tmdl(dataset: Dataset, server: str, database: str, source: str = "embedded") -> str:
     lines = [f"table {dataset.name}", ""]
     for label, dax, display in dataset.measures:
         lines.extend((f"\tmeasure '{label}' = {dax}", f"\t\tformatString: {display}", ""))
@@ -82,15 +112,19 @@ def tmdl(dataset: Dataset, server: str, database: str) -> str:
         lines.extend((f"\tcolumn {label}", f"\t\tdataType: {dtype}",
                       "\t\tsummarizeBy: none", f"\t\tsourceColumn: {label}", ""))
     types = ", ".join(f'{{"{name}", {mtype}}}' for name, _, mtype in dataset.columns)
-    lines.extend((f"\tpartition {dataset.name} = m", "\t\tmode: import", "\t\tsource =",
-                  "\t\t\t\tlet",
-                  f'\t\t\t\t    Rows = MySQL.Database({json.dumps(server)}, {json.dumps(database)}, [Query="SELECT * FROM {dataset.sql_table}"]),',
-                  f"\t\t\t\t    Columns = Table.TransformColumnTypes(Rows, {{{types}}})",
+    lines.extend((f"\tpartition {dataset.name} = m", "\t\tmode: import", "\t\tsource =", "\t\t\t\tlet"))
+    if source == "embedded":
+        lines.extend(embedded_csv_source(dataset))
+        input_table = "WithHeaders"
+    else:
+        lines.append(f'\t\t\t\t    Rows = MySQL.Database({json.dumps(server)}, {json.dumps(database)}, [Query="SELECT * FROM {dataset.sql_table}"]),')
+        input_table = "Rows"
+    lines.extend((f"\t\t\t\t    Columns = Table.TransformColumnTypes({input_table}, {{{types}}})",
                   "\t\t\t\tin", "\t\t\t\t    Columns", ""))
     return "\n".join(lines)
 
 
-def semantic_model(server: str, database: str) -> None:
+def semantic_model(server: str, database: str, source: str = "embedded") -> None:
     folder = OUTPUT / f"{TITLE}.SemanticModel"
     put_json(folder / ".platform", {
         "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
@@ -109,7 +143,7 @@ def semantic_model(server: str, database: str) -> None:
     for dataset in DATASETS:
         path = definition / "tables" / f"{dataset.name}.tmdl"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(tmdl(dataset, server, database), encoding="utf-8")
+        path.write_text(tmdl(dataset, server, database, source), encoding="utf-8")
 
 
 def binding(table: str, item: str, is_measure: bool = False) -> dict:
@@ -258,7 +292,11 @@ def report_definition() -> None:
         "$schema": schema("report/definition/versionMetadata", "1.0.0"), "version": "2.0.0"})
     put_json(definition / "report.json", {
         "$schema": schema("report/definition/report", "3.0.0"),
-        "themeCollection": {"customTheme": {"name": theme_name, "type": "RegisteredResources"}},
+        "themeCollection": {"customTheme": {
+            "name": theme_name,
+            "reportVersionAtImport": {"visual": "2.2.0", "page": "2.0.0", "report": "3.0.0"},
+            "type": "RegisteredResources",
+        }},
         "resourcePackages": [{"name": "RegisteredResources", "type": "RegisteredResources",
                               "items": [{"name": theme_name, "path": theme_name,
                                          "type": "CustomTheme"}]}],
@@ -287,11 +325,13 @@ def main() -> None:
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=3306)
     parser.add_argument("--database", default="upi_market_analysis")
+    parser.add_argument("--source", choices=("embedded", "mysql"), default="embedded",
+                        help="embedded data opens without MySQL; mysql uses the local database")
     args = parser.parse_args()
     for dataset in DATASETS:
         if not (ROOT / "data" / "processed" / f"{dataset.sql_table}.csv").is_file():
             parser.error(f"Run build.py first: missing {dataset.sql_table}.csv")
-    semantic_model(f"{args.host}:{args.port}", args.database)
+    semantic_model(f"{args.host}:{args.port}", args.database, args.source)
     report_definition()
     archive = OUTPUT / f"{TITLE} - Power BI project.zip"
     with ZipFile(archive, "w", ZIP_DEFLATED) as zip_file:
@@ -299,7 +339,14 @@ def main() -> None:
             if path.is_file() and path != archive:
                 zip_file.write(path, path.relative_to(OUTPUT))
         zip_file.write(ROOT / "LICENSE", "LICENSE")
-    print(f"Created {OUTPUT / (TITLE + '.pbip')} and {archive}")
+    source_archive = ROOT / f"{TITLE} - Source.zip"
+    with ZipFile(source_archive, "w", ZIP_DEFLATED) as zip_file:
+        for path in sorted(ROOT.rglob("*")):
+            if path.is_file() and path != source_archive and not any(
+                part in {".git", "__pycache__"} for part in path.relative_to(ROOT).parts
+            ):
+                zip_file.write(path, path.relative_to(ROOT))
+    print(f"Created {OUTPUT / (TITLE + '.pbip')}, {archive}, and {source_archive}")
     print("Refresh and review the four report pages in Power BI Desktop.")
 
 

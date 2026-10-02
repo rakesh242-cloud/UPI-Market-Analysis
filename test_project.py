@@ -1,13 +1,16 @@
 """Checks the prepared data and MySQL input types."""
 
 import csv
+import re
 import unittest
+import zipfile
 from collections import defaultdict
 from pathlib import Path
 from datetime import date
 from decimal import Decimal
 
 from load_mysql import rows_from_csv
+from build_powerbi import DATASETS
 
 
 ROOT = Path(__file__).resolve().parent
@@ -49,6 +52,26 @@ class ProjectChecks(unittest.TestCase):
         self.assertIsInstance(first["date"], date)
         self.assertIsInstance(first["volume_mn"], Decimal)
         self.assertTrue(any(row[fields.index("value_cr")] is None for row in rows))
+
+    def test_powerbi_snapshot_contains_the_prepared_rows(self):
+        tables = ROOT / "powerbi" / "UPI Market Analysis.SemanticModel" / "definition" / "tables"
+        archive = ROOT / "powerbi" / "UPI Market Analysis - Power BI project.zip"
+        for dataset in DATASETS:
+            with self.subTest(table=dataset.name):
+                path = tables / f"{dataset.name}.tmdl"
+                if path.is_file():
+                    definition = path.read_text(encoding="utf-8")
+                else:
+                    with zipfile.ZipFile(archive) as package:
+                        definition = package.read(
+                            f"UPI Market Analysis.SemanticModel/definition/tables/{dataset.name}.tmdl"
+                        ).decode("utf-8").replace("\r\n", "\n")
+                self.assertNotIn("MySQL.Database", definition)
+                csv_expression = definition.split("CsvText = ", 1)[1].split(",\n\t\t\t\t    Rows =", 1)[0]
+                chunks = re.findall(r'"((?:[^"]|"")*)"', csv_expression)
+                actual = "".join(chunk.replace('""', '"') for chunk in chunks).replace("#(lf)", "\n")
+                expected = (DATA / f"{dataset.sql_table}.csv").read_text(encoding="utf-8").replace("\r\n", "\n")
+                self.assertEqual(actual, expected)
 
 
 if __name__ == "__main__":
