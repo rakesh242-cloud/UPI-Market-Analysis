@@ -2,43 +2,48 @@
 
 **Python · MySQL · Power BI**
 
-An analysis of India's UPI app market by Rakesh. Python prepares monthly app statistics from the [National Payments Corporation of India (NPCI)](https://www.npci.org.in/what-we-do/upi/upi-ecosystem-statistics), loads five tables into MySQL, and feeds an interactive four-page Power BI report. The report is the only dashboard in this project.
+This project looks at how India's UPI app market changed from January 2022 to December 2025. Python prepares the monthly app data published by [NPCI](https://www.npci.org.in/what-we-do/upi/upi-ecosystem-statistics), MySQL holds the analysis tables, and Power BI brings the results together in an interactive report.
 
-## What the report shows
+## In the report
 
-- **Market Momentum:** monthly volume and yearly selection
-- **Competitive Landscape:** app shares, annual contributions, and cross-filtered selections
-- **App Explorer:** app and year controls with volume trends and rankings
-- **Monthly Rhythm:** four-year calendar-month averages
+- **Market Momentum** tracks monthly transaction volume.
+- **Competitive Landscape** compares the leading apps and their market shares.
+- **App Explorer** lets you filter by app and year.
+- **Monthly Rhythm** shows how volume varies across the calendar year.
 
-The figures are sums of the apps listed in NPCI's monthly workbooks, **not** the separate UPI network total. A dash in the source is treated as zero; unreadable value cells stay missing. Obvious app-name variants are normalized, and repeated app rows within a month are combined. Share uses all listed apps in that month as its denominator.
+The report has year and app filters, and charts on the same page respond to selections. Download the [Power BI project](powerbi/UPI%20Market%20Analysis%20-%20Power%20BI%20project.zip), extract it, and open `UPI Market Analysis.pbip` in Power BI Desktop.
 
-## Project files
+## Data notes
 
-| Path | Purpose |
+The dataset covers 48 monthly NPCI **UPI Apps** workbooks. Monthly volume is the sum of the apps listed in each workbook, which can differ from NPCI's separate network-wide UPI total. App shares use that monthly app sum as the denominator.
+
+The preparation step combines duplicate app rows and standardizes a few name variants. A dash in the source is read as zero; an unreadable value cell stays missing. The original NPCI workbooks are not included here.
+
+## Files
+
+| File | What it does |
 | --- | --- |
-| [Complete project ZIP](UPI%20Market%20Analysis%20-%20Rakesh%20Source.zip) | Clean source snapshot without prior Git history |
-| [Power BI project ZIP](powerbi/UPI%20Market%20Analysis%20-%20Power%20BI%20project.zip) | Downloadable Power BI project; extract it before opening the `.pbip` file |
-| [`build.py`](build.py) | Clean NPCI Excel workbooks into six reusable CSV tables |
-| [`load_mysql.py`](load_mysql.py) and [`schema.sql`](schema.sql) | Create and populate the MySQL database |
-| [`build_powerbi.py`](build_powerbi.py) | Generate Rakesh's four-page Power BI report and color theme with a MySQL connection |
-| [`analysis.sql`](analysis.sql) | Seven MySQL analytical queries |
-| [`data/processed/`](data/processed/) | Prepared CSV data for reproducibility |
-| [`test_project.py`](test_project.py) | Data reconciliation and loader checks |
+| [Complete project download](UPI%20Market%20Analysis%20-%20Source.zip) | All project files in one ZIP |
+| [`build.py`](build.py) | Prepares six CSV tables from the monthly workbooks |
+| [`load_mysql.py`](load_mysql.py) and [`schema.sql`](schema.sql) | Loads five analysis tables into MySQL |
+| [`analysis.sql`](analysis.sql) | Queries for volume, app share, and trends |
+| [`build_powerbi.py`](build_powerbi.py) | Creates the Power BI project and its MySQL connection |
+| [`data/processed/`](data/processed/) | Prepared CSV data |
+| [`test_project.py`](test_project.py) | Checks the prepared data |
 
-## Run the project
+## Getting started
 
-1. Install Python 3.10+, MySQL Server 8.0+, Power BI Desktop, and [Oracle MySQL Connector/NET](https://learn.microsoft.com/en-us/power-query/connectors/mysql-database#prerequisites). Install Python packages with `python -m pip install -r requirements.txt`.
-2. The prepared CSVs are included. To rebuild them, download the monthly **UPI Apps** workbooks from [NPCI](https://www.npci.org.in/what-we-do/upi/upi-ecosystem-statistics) into `data/raw/` and run `python build.py --source data/raw`. This edition uses 48 months; keep filenames ending in `YYYY-Mon.xlsx`.
-3. Set your MySQL password in the `UPI_MYSQL_PASSWORD` environment variable, or let the loader prompt for it. Run `python load_mysql.py --host localhost --port 3306 --database upi_market_analysis --user root`. The loader creates the database and tables, then replaces the table rows in one transaction. Use a MySQL account with database-creation rights on the first run.
-4. Run `python build_powerbi.py --host localhost --port 3306 --database upi_market_analysis`. The script creates the project and ZIP in `powerbi/`. If the files already exist, this step is needed only when changing the MySQL host, port, or database name.
-5. Open `powerbi/UPI Market Analysis.pbip` in Power BI Desktop. Choose **Database** authentication for the MySQL connection, enter your MySQL credentials, and refresh the report. Browse **Market Momentum**, **Competitive Landscape**, **App Explorer**, and **Monthly Rhythm**. Use slicers and select chart marks to filter related visuals on a page.
+1. Install Python 3.10+, MySQL Server 8.0+, Power BI Desktop, and [MySQL Connector/NET](https://learn.microsoft.com/en-us/power-query/connectors/mysql-database#prerequisites). Install the Python packages with `python -m pip install -r requirements.txt`.
+2. The prepared CSVs are included. To rebuild them, download the monthly UPI Apps workbooks from [NPCI](https://www.npci.org.in/what-we-do/upi/upi-ecosystem-statistics) into `data/raw/`. Keep filenames ending in `YYYY-Mon.xlsx`, then run `python build.py --source data/raw`.
+3. Set `UPI_MYSQL_PASSWORD` in your environment, or enter the password when prompted. Run `python load_mysql.py --host localhost --port 3306 --database upi_market_analysis --user root`.
+4. Run `python build_powerbi.py --host localhost --port 3306 --database upi_market_analysis` if you need to change the connection settings. Otherwise, use the included Power BI project ZIP.
+5. Open the extracted `.pbip` file in Power BI Desktop, sign in to MySQL with **Database** authentication, and refresh the report.
 6. Run `python -m unittest -v test_project.py` to check the prepared data.
 
-Do not put a MySQL password into the project files. The Python loader reads it from the environment or a hidden prompt; Power BI Desktop stores its connection credentials separately. For a MySQL server on another computer, use its hostname in both commands.
+Keep MySQL passwords out of the project files. The Python loader reads a password from the environment or a hidden prompt; Power BI Desktop stores its connection credentials separately.
 
-## Data and authorship
+## Source and license
 
-The Python pipeline, MySQL workflow, SQL analysis, Power BI generator, report structure, and theme in this version were created for **Rakesh**. This project's code is licensed under [MIT](LICENSE) in Rakesh's name. The underlying UPI statistics are from [NPCI UPI ecosystem statistics](https://www.npci.org.in/what-we-do/upi/upi-ecosystem-statistics); Rakesh does not claim ownership of NPCI's source data. The original workbooks are not redistributed.
+Project owner: **Rakesh**. The code and report files are covered by the [MIT license](LICENSE). The underlying UPI statistics come from [NPCI](https://www.npci.org.in/what-we-do/upi/upi-ecosystem-statistics).
 
-The Power BI project uses Microsoft's public [PBIR report format](https://learn.microsoft.com/en-us/power-bi/developer/projects/projects-report). The files can be edited in Power BI Desktop after refresh. Power BI Desktop and a live MySQL connection are required for a final visual check; the project generator and data checks can run without them.
+The Power BI project files were generated and checked for structure, but the report still needs a refresh and visual review in Power BI Desktop with a live MySQL connection.
