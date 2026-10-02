@@ -1,16 +1,17 @@
-"""Generate an editable Power BI Project (PBIP) from the processed CSV tables."""
+"""Generate an editable Power BI Project (PBIP) backed by MySQL."""
 
 from __future__ import annotations
 
 import json
 import uuid
+import argparse
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 
 ROOT = Path(__file__).resolve().parent
 BASE = ROOT / "powerbi"
-NAME = "Rakesh UPI Market Pulse"
+NAME = "UPI Market Analysis"
 REPORT = BASE / f"{NAME}.Report"
 MODEL = BASE / f"{NAME}.SemanticModel"
 SCHEMA_ROOT = "https://developer.microsoft.com/json-schemas/fabric/item"
@@ -63,8 +64,8 @@ def q(value: str) -> str:
     return f"'{value}'" if " " in value or "-" in value else value
 
 
-def table_tmdl(name: str, file_name: str, columns: list, measures: list) -> str:
-    path = str(ROOT / "data" / "processed" / file_name)
+def table_tmdl(name: str, table_name: str, columns: list, measures: list,
+               server: str, database: str) -> str:
     lines = [f"table {name}", ""]
     for label, expression, fmt in measures:
         lines += [f"\tmeasure {q(label)} = {expression}", f"\t\tformatString: {fmt}", ""]
@@ -73,19 +74,20 @@ def table_tmdl(name: str, file_name: str, columns: list, measures: list) -> str:
                   f"\t\tsummarizeBy: {'none' if kind in ('string', 'dateTime') else 'sum'}",
                   f"\t\tsourceColumn: {field}", ""]
     column_types = ", ".join(f'{{"{field}", {power_type}}}' for field, _, power_type in columns)
+    mysql_query = f"SELECT * FROM {table_name}"
     lines += [f"\tpartition {name} = m", "\t\tmode: import", "\t\tsource =",
-              "\t\t\t\tlet", f'\t\t\t\t    Source = Csv.Document(File.Contents("{path}"), [Delimiter=",", Columns={len(columns)}, Encoding=65001, QuoteStyle=QuoteStyle.Csv]),',
-              '\t\t\t\t    Promoted = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),',
-              f'\t\t\t\t    Typed = Table.TransformColumnTypes(Promoted, {{{column_types}}})',
+              "\t\t\t\tlet",
+              f'\t\t\t\t    Source = MySQL.Database({json.dumps(server)}, {json.dumps(database)}, [Query={json.dumps(mysql_query)}]),',
+              f'\t\t\t\t    Typed = Table.TransformColumnTypes(Source, {{{column_types}}})',
               "\t\t\t\tin", "\t\t\t\t    Typed", ""]
     return "\n".join(lines)
 
 
-def build_model() -> None:
+def build_model(server: str, database: str) -> None:
     write_json(MODEL / ".platform", {
         "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
         "metadata": {"type": "SemanticModel", "displayName": NAME},
-        "config": {"version": "2.0", "logicalId": str(uuid.uuid5(uuid.NAMESPACE_DNS, "rakesh.upi.marketpulse.model"))},
+        "config": {"version": "2.0", "logicalId": str(uuid.uuid5(uuid.NAMESPACE_DNS, "upi.market.analysis.model"))},
     })
     write_json(MODEL / "definition.pbism", {
         "$schema": f"{SCHEMA_ROOT}/semanticModel/definitionProperties/1.0.0/schema.json",
@@ -101,7 +103,8 @@ def build_model() -> None:
     for name, (file_name, columns, measures) in TABLES.items():
         path = definition / "tables" / f"{name}.tmdl"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(table_tmdl(name, file_name, columns, measures), encoding="utf-8")
+        path.write_text(table_tmdl(name, file_name.removesuffix(".csv"), columns, measures,
+                                   server, database), encoding="utf-8")
 
 
 def field(table: str, property_name: str, kind: str) -> dict:
@@ -146,9 +149,9 @@ def textbox(name: str, text: str, x: int, y: int, w: int, h: int, size: int) -> 
 
 
 PAGES = [
-    ("pulse", "Market Pulse", [
-        textbox("pulse_title", "UPI Market Pulse", 40, 24, 700, 55, 28),
-        textbox("pulse_note", "Reported UPI app volumes, January 2022 to December 2025 | Rakesh", 42, 90, 1100, 35, 12),
+    ("pulse", "Market Overview", [
+        textbox("pulse_title", "UPI Market Analysis", 40, 24, 700, 55, 28),
+        textbox("pulse_note", "Reported UPI app volumes, January 2022 to December 2025", 42, 90, 1100, 35, 12),
         textbox("pulse_volume_label", "December 2025 volume (million)", 45, 130, 400, 35, 13),
         visual("pulse_volume_card", "card", 45, 168, 350, 110, measure=("MarketMonthly", "Latest Reported Volume (Mn)", "Measure")),
         textbox("pulse_top3_label", "December 2025 top-three share", 445, 130, 400, 35, 13),
@@ -160,7 +163,7 @@ PAGES = [
     ]),
     ("competition", "Competition", [
         textbox("competition_title", "App competition", 40, 24, 700, 55, 28),
-        textbox("competition_note", "Share of reported app volume | Rakesh", 42, 90, 750, 35, 12),
+        textbox("competition_note", "Share of reported app volume", 42, 90, 750, 35, 12),
         textbox("competition_phonepe_label", "PhonePe share, December 2025", 45, 130, 400, 35, 13),
         visual("competition_phonepe_card", "card", 45, 170, 350, 110, measure=("MarketMonthly", "Latest PhonePe Share", "Measure")),
         textbox("competition_google_label", "Google Pay share, December 2025", 445, 130, 400, 35, 13),
@@ -183,7 +186,7 @@ PAGES = [
 
 def build_report() -> None:
     page_ids = {
-        short_name: "ReportSection" + uuid.uuid5(uuid.NAMESPACE_DNS, f"rakesh.upi.{short_name}").hex[:20]
+        short_name: "ReportSection" + uuid.uuid5(uuid.NAMESPACE_DNS, f"upi.market.analysis.{short_name}").hex[:20]
         for short_name, _, _ in PAGES
     }
     write_json(BASE / f"{NAME}.pbip", {
@@ -194,7 +197,7 @@ def build_report() -> None:
     write_json(REPORT / ".platform", {
         "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
         "metadata": {"type": "Report", "displayName": NAME},
-        "config": {"version": "2.0", "logicalId": str(uuid.uuid5(uuid.NAMESPACE_DNS, "rakesh.upi.marketpulse.report"))},
+        "config": {"version": "2.0", "logicalId": str(uuid.uuid5(uuid.NAMESPACE_DNS, "upi.market.analysis.report"))},
     })
     write_json(REPORT / "definition.pbir", {
         "$schema": f"{SCHEMA_ROOT}/report/definitionProperties/2.0.0/schema.json",
@@ -223,15 +226,21 @@ def build_report() -> None:
             "height": 720, "width": 1280,
         })
         for item in visuals:
-            item["name"] = uuid.uuid5(uuid.NAMESPACE_DNS, f"rakesh.upi.{short_name}.{item['name']}").hex[:20]
+            item["name"] = uuid.uuid5(uuid.NAMESPACE_DNS, f"upi.market.analysis.{short_name}.{item['name']}").hex[:20]
             write_json(page_dir / "visuals" / item["name"] / "visual.json", item)
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--host", default="localhost")
+    parser.add_argument("--port", type=int, default=3306)
+    parser.add_argument("--database", default="upi_market_analysis")
+    args = parser.parse_args()
+    server = f"{args.host}:{args.port}"
     for file_name, _, _ in TABLES.values():
         if not (ROOT / "data" / "processed" / file_name).exists():
             raise FileNotFoundError(f"Run build.py first: {file_name}")
-    build_model()
+    build_model(server, args.database)
     build_report()
     archive = BASE / f"{NAME} - Power BI project.zip"
     with ZipFile(archive, "w", ZIP_DEFLATED) as bundle:

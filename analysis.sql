@@ -1,4 +1,4 @@
--- Rakesh | UPI Market Pulse
+-- UPI Market Analysis | MySQL 8.0+
 -- Units: volume_mn = millions of reported app transactions.
 -- Shares use the sum of listed app volume for the same period.
 

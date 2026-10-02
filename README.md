@@ -1,48 +1,40 @@
-# UPI Market Pulse
+# UPI Market Analysis
 
-An interactive analysis of India's UPI app market. The project turns monthly app statistics from the [National Payments Corporation of India (NPCI)](https://www.npci.org.in/what-we-do/upi/upi-ecosystem-statistics) into a browser dashboard, a Power BI project, reusable data tables, and SQL analysis.
+**Python · MySQL · Power BI**
 
-**[Explore the live dashboard](https://rakesh242-cloud.github.io/rakesh-upi-market-pulse/)** · [Dashboard source](docs/index.html)
+An analysis of India's UPI app market by Rakesh. Python cleans monthly app statistics from the [National Payments Corporation of India (NPCI)](https://www.npci.org.in/what-we-do/upi/upi-ecosystem-statistics), loads five tables into MySQL, and feeds an interactive three-page Power BI report. The report is the only dashboard in this project.
 
-The dashboard is a single, self-contained file that also opens locally in a browser.
+## What the report shows
 
-Use the period selector and month slider to change the entire view. Play the timeline, click a chart month, toggle app lines, or click an annual bar to jump to that year. The ranking follows the selected month.
+- Monthly reported app transaction volume from January 2022 through December 2025
+- Market concentration and the shares of PhonePe, Google Pay, and Paytm
+- Annual competition between leading app groups and transaction seasonality
 
-## What the analysis shows
+The figures are sums of the apps listed in NPCI's monthly workbooks, **not** the separate UPI network total. A dash in the source is treated as zero; unreadable value cells stay missing. Obvious app-name variants are normalized, and repeated app rows within a month are combined. Share uses all listed apps in that month as its denominator.
 
-- Reported monthly transaction volume from January 2022 through December 2025
-- Monthly share of PhonePe, Google Pay, and Paytm, plus their combined share
-- Annual app mix, a ranking that follows the selected month, and normalized seasonality
-- Seven SQL queries covering year-over-year growth, concentration, rankings, seasonality, and data quality
-
-The dashboard uses the transaction **volume** reported in the app-level NPCI workbooks. Its totals are sums of listed apps, so they should not be read as the entire UPI network total. A dash in the source is treated as zero; unreadable value cells stay missing. App names with obvious variations are normalized, and repeated app rows within a month are combined. Share is calculated against all listed apps in that month. The source workbooks remain available from NPCI; they are not redistributed in this repository.
-
-## Contents
+## Project files
 
 | Path | Purpose |
 | --- | --- |
-| [`docs/index.html`](docs/index.html) | Standalone interactive dashboard for GitHub Pages |
-| [`dashboard/template.html`](dashboard/template.html) | Dashboard source |
-| [Power BI project download](powerbi/Rakesh%20UPI%20Market%20Pulse%20-%20Power%20BI%20project.zip) | Power BI Desktop project with three report pages; extract the ZIP first |
-| [`data/processed/`](data/processed/) | Clean CSV tables and SQLite database |
-| [`analysis.sql`](analysis.sql) | Reusable analytical queries |
-| [`build.py`](build.py), [`make_dashboard.py`](make_dashboard.py), [`build_powerbi.py`](build_powerbi.py) | Rebuild scripts |
-| [`test_project.py`](test_project.py) | Data reconciliation and query checks |
+| [Power BI project ZIP](powerbi/UPI%20Market%20Analysis%20-%20Power%20BI%20project.zip) | Downloadable Power BI project; extract it before opening the `.pbip` file |
+| [`build.py`](build.py) | Clean NPCI Excel workbooks into six reusable CSV tables |
+| [`load_mysql.py`](load_mysql.py) and [`schema.sql`](schema.sql) | Create and populate the MySQL database |
+| [`build_powerbi.py`](build_powerbi.py) | Generate the Power BI report with a MySQL connection |
+| [`analysis.sql`](analysis.sql) | Seven MySQL analytical queries |
+| [`data/processed/`](data/processed/) | Prepared CSV data for reproducibility |
+| [`test_project.py`](test_project.py) | Data reconciliation and loader checks |
 
-## Rebuild from NPCI workbooks
+## Run the project
 
-1. Download the monthly **UPI Apps** Excel workbooks from the [NPCI UPI ecosystem statistics page](https://www.npci.org.in/what-we-do/upi/upi-ecosystem-statistics) into one folder. This edition uses the 48 months from January 2022 to December 2025. Preserve filenames ending in `YYYY-Mon.xlsx` (for example, `2025-Dec.xlsx`).
-2. Install Python 3.10+ and the dependency: `python -m pip install -r requirements.txt`.
-3. Run `python build.py --source path/to/workbooks`.
-4. Run `python make_dashboard.py` and `python build_powerbi.py`.
-5. Run `python -m unittest -v test_project.py` to check the output.
+1. Install Python 3.10+, MySQL Server 8.0+, Power BI Desktop, and [Oracle MySQL Connector/NET](https://learn.microsoft.com/en-us/power-query/connectors/mysql-database#prerequisites). Install Python packages with `python -m pip install -r requirements.txt`.
+2. The prepared CSVs are included. To rebuild them, download the monthly **UPI Apps** workbooks from [NPCI](https://www.npci.org.in/what-we-do/upi/upi-ecosystem-statistics) into `data/raw/` and run `python build.py --source data/raw`. This edition uses 48 months; keep filenames ending in `YYYY-Mon.xlsx`.
+3. Set your MySQL password in the `UPI_MYSQL_PASSWORD` environment variable, or let the loader prompt for it. Run `python load_mysql.py --host localhost --port 3306 --database upi_market_analysis --user root`. The loader creates the database and tables, then replaces the table rows in one transaction. Use a MySQL account with database-creation rights on the first run.
+4. Run `python build_powerbi.py --host localhost --port 3306 --database upi_market_analysis`. The script creates the project and ZIP in `powerbi/`. If the files already exist, this step is needed only when changing the MySQL host, port, or database name.
+5. Open `powerbi/UPI Market Analysis.pbip` in Power BI Desktop. Choose **Database** authentication for the MySQL connection, enter your MySQL credentials, and refresh the report. Browse its **Market Overview**, **Competition**, and **Seasonality** pages. Power BI charts support selection and cross-filtering.
+6. Run `python -m unittest -v test_project.py` to check the prepared data.
 
-The processed data and ready-to-use dashboard are included for readers who just want to explore the results. Extract the Power BI ZIP into the `powerbi` folder. After moving the project to a different computer, rerun `build_powerbi.py` before opening the `.pbip` file so its CSV paths point to the new location. Open the `.pbip` file in Power BI Desktop and refresh the model.
+Do not put a MySQL password into the project files. The Python loader reads it from the environment or a hidden prompt; Power BI Desktop stores its connection credentials separately. For a MySQL server on another computer, use its hostname in both commands.
 
-## Publish the dashboard with GitHub Pages
+## Data and authorship
 
-In the GitHub repository, choose **Settings → Pages → Deploy from a branch**, select the default branch and the `/docs` folder, then save. The published site uses `docs/index.html`.
-
-## Authorship and source
-
-Analysis, data preparation, SQL, dashboard, and Power BI report by **Rakesh**. Source data: [NPCI UPI ecosystem statistics](https://www.npci.org.in/what-we-do/upi/upi-ecosystem-statistics). See [LICENSE](LICENSE) for the license on this project's original code and report assets.
+Analysis, Python workflow, SQL, and Power BI report by **Rakesh**. Source data: [NPCI UPI ecosystem statistics](https://www.npci.org.in/what-we-do/upi/upi-ecosystem-statistics). The original workbooks are not redistributed. See [LICENSE](LICENSE) for the license on this project's original code and report assets.

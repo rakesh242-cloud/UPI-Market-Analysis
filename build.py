@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import csv
 import re
-import sqlite3
 from calendar import month_abbr
 from collections import defaultdict
 from pathlib import Path
@@ -190,28 +189,6 @@ def build(source: Path) -> None:
     write_csv("leaders_year.csv", list(yearly[0]), yearly)
     write_csv("seasonality.csv", list(seasonality[0]), seasonality)
     write_csv("latest_top20.csv", list(ranking[0]), ranking)
-    database = OUTPUT / "upi_market.sqlite"
-    with sqlite3.connect(database) as connection:
-        for table, file_name in (("app_month", "app_month.csv"), ("market_month", "market_month.csv"),
-                                 ("leaders_month", "leaders_month.csv"), ("leaders_year", "leaders_year.csv")):
-            with (OUTPUT / file_name).open(newline="", encoding="utf-8") as stream:
-                records = list(csv.DictReader(stream))
-            connection.execute(f"DROP TABLE IF EXISTS {table}")
-            columns = list(records[0])
-            types = {
-                name: ("TEXT" if name in {"date", "app", "app_group"} else
-                       "INTEGER" if name in {"year", "month", "listed_apps", "missing_value_apps", "value_complete"} else
-                       "REAL")
-                for name in columns
-            }
-            connection.execute(f"CREATE TABLE {table} ({', '.join(name + ' ' + types[name] for name in columns)})")
-            def typed(record: dict) -> list:
-                return [None if record[name] == "" else
-                        int(record[name]) if types[name] == "INTEGER" else
-                        float(record[name]) if types[name] == "REAL" else record[name]
-                        for name in columns]
-            connection.executemany(f"INSERT INTO {table} VALUES ({', '.join('?' for _ in columns)})",
-                                   (typed(record) for record in records))
     print(f"Built {len(app_month)} app-month records from {len(files)} NPCI workbooks")
     print(f"Latest month: {latest}; reported app volume: {latest_total:,.2f} million")
 
