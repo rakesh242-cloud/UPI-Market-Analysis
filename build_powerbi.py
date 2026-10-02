@@ -1,233 +1,285 @@
-"""Generate an editable Power BI Project (PBIP) backed by MySQL."""
-
+"""Create Rakesh's UPI Market Analysis Power BI project from MySQL tables."""
 from __future__ import annotations
 
+import argparse
 import json
 import uuid
-import argparse
+from dataclasses import dataclass, field
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 
 ROOT = Path(__file__).resolve().parent
-BASE = ROOT / "powerbi"
-NAME = "UPI Market Analysis"
-REPORT = BASE / f"{NAME}.Report"
-MODEL = BASE / f"{NAME}.SemanticModel"
-SCHEMA_ROOT = "https://developer.microsoft.com/json-schemas/fabric/item"
-TABLES = {
-    "MarketMonthly": (
-        "market_month.csv",
-        [("date", "dateTime", "type date"), ("year", "int64", "Int64.Type"),
-         ("month", "int64", "Int64.Type"), ("reported_volume_mn", "double", "type number"),
-         ("listed_apps", "int64", "Int64.Type"), ("top3_share", "double", "type number"),
-         ("phonepe_share", "double", "type number"), ("googlepay_share", "double", "type number"),
-         ("paytm_share", "double", "type number"), ("missing_value_apps", "int64", "Int64.Type")],
-        [
-            ("Reported Volume (Mn)", "SUM(MarketMonthly[reported_volume_mn])", "#,0"),
-            ("Top Three Share", "MAX(MarketMonthly[top3_share])", "0.0%"),
-            ("Latest Reported Volume (Mn)", "CALCULATE(MAX(MarketMonthly[reported_volume_mn]), MarketMonthly[date] = MAXX(ALL(MarketMonthly), MarketMonthly[date]))", "#,0"),
-            ("Latest Top Three Share", "CALCULATE(MAX(MarketMonthly[top3_share]), MarketMonthly[date] = MAXX(ALL(MarketMonthly), MarketMonthly[date]))", "0.0%"),
-            ("Latest PhonePe Share", "CALCULATE(MAX(MarketMonthly[phonepe_share]), MarketMonthly[date] = MAXX(ALL(MarketMonthly), MarketMonthly[date]))", "0.0%"),
-            ("Latest Google Pay Share", "CALCULATE(MAX(MarketMonthly[googlepay_share]), MarketMonthly[date] = MAXX(ALL(MarketMonthly), MarketMonthly[date]))", "0.0%"),
-        ],
-    ),
-    "LeadersMonthly": (
-        "leaders_month.csv",
-        [("date", "dateTime", "type date"), ("year", "int64", "Int64.Type"),
-         ("app_group", "string", "type text"), ("volume_mn", "double", "type number"),
-         ("share", "double", "type number")],
-        [("App Share", "MAX(LeadersMonthly[share])", "0.0%")],
-    ),
-    "LeadersYear": (
-        "leaders_year.csv",
-        [("year", "int64", "Int64.Type"), ("app_group", "string", "type text"),
-         ("volume_mn", "double", "type number"), ("share", "double", "type number")],
-        [("Annual App Volume (Mn)", "SUM(LeadersYear[volume_mn])", "#,0")],
-    ),
-    "Seasonality": (
-        "seasonality.csv",
-        [("month", "int64", "Int64.Type"), ("month_name", "string", "type text"),
-         ("mean_reported_volume_mn", "double", "type number"),
-         ("years_observed", "int64", "Int64.Type")],
-        [("Mean Monthly Volume (Mn)", "SUM(Seasonality[mean_reported_volume_mn])", "#,0")],
-    ),
-}
+OUTPUT = ROOT / "powerbi"
+TITLE = "UPI Market Analysis"
+SCHEMA = "https://developer.microsoft.com/json-schemas/fabric/item"
+NAMESPACE = uuid.UUID("ce1270df-ec51-47f8-8d90-b516757b70ae")
 
 
-def write_json(path: Path, value: object) -> None:
+def stable_id(label: str) -> str:
+    return uuid.uuid5(NAMESPACE, label).hex[:20]
+
+
+def put_json(path: Path, content: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(content, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def q(value: str) -> str:
-    return f"'{value}'" if " " in value or "-" in value else value
+def schema(kind: str, version: str) -> str:
+    return f"{SCHEMA}/{kind}/{version}/schema.json"
 
 
-def table_tmdl(name: str, table_name: str, columns: list, measures: list,
-               server: str, database: str) -> str:
-    lines = [f"table {name}", ""]
-    for label, expression, fmt in measures:
-        lines += [f"\tmeasure {q(label)} = {expression}", f"\t\tformatString: {fmt}", ""]
-    for field, kind, _ in columns:
-        lines += [f"\tcolumn {field}", f"\t\tdataType: {kind}",
-                  f"\t\tsummarizeBy: {'none' if kind in ('string', 'dateTime') else 'sum'}",
-                  f"\t\tsourceColumn: {field}", ""]
-    column_types = ", ".join(f'{{"{field}", {power_type}}}' for field, _, power_type in columns)
-    mysql_query = f"SELECT * FROM {table_name}"
-    lines += [f"\tpartition {name} = m", "\t\tmode: import", "\t\tsource =",
-              "\t\t\t\tlet",
-              f'\t\t\t\t    Source = MySQL.Database({json.dumps(server)}, {json.dumps(database)}, [Query={json.dumps(mysql_query)}]),',
-              f'\t\t\t\t    Typed = Table.TransformColumnTypes(Source, {{{column_types}}})',
-              "\t\t\t\tin", "\t\t\t\t    Typed", ""]
+@dataclass(frozen=True)
+class Dataset:
+    name: str
+    sql_table: str
+    columns: tuple[tuple[str, str, str], ...]
+    measures: tuple[tuple[str, str, str], ...]
+
+
+DATASETS = (
+    Dataset("Market", "market_month", (
+        ("date", "dateTime", "type date"), ("year", "int64", "Int64.Type"),
+        ("month", "int64", "Int64.Type"), ("reported_volume_mn", "double", "type number"),
+        ("listed_apps", "int64", "Int64.Type"), ("top3_share", "double", "type number"),
+        ("phonepe_share", "double", "type number"),
+        ("googlepay_share", "double", "type number"),
+        ("paytm_share", "double", "type number"),
+        ("missing_value_apps", "int64", "Int64.Type"),
+    ), (
+        ("Transactions (Mn)", "SUM(Market[reported_volume_mn])", "#,0"),
+        ("Peak Month (Mn)", "MAX(Market[reported_volume_mn])", "#,0"),
+        ("Top Three %", "AVERAGE(Market[top3_share])", "0.0%"),
+        ("Active Apps", "AVERAGE(Market[listed_apps])", "#,0"),
+    )),
+    Dataset("Competitors", "leaders_month", (
+        ("date", "dateTime", "type date"), ("year", "int64", "Int64.Type"),
+        ("app_group", "string", "type text"), ("volume_mn", "double", "type number"),
+        ("share", "double", "type number"),
+    ), (
+        ("App Transactions (Mn)", "SUM(Competitors[volume_mn])", "#,0"),
+        ("Average Share", "AVERAGE(Competitors[share])", "0.0%"),
+    )),
+    Dataset("AppLedger", "app_month", (
+        ("date", "dateTime", "type date"), ("year", "int64", "Int64.Type"),
+        ("month", "int64", "Int64.Type"), ("app", "string", "type text"),
+        ("volume_mn", "double", "type number"), ("value_cr", "double", "type number"),
+        ("value_complete", "int64", "Int64.Type"),
+    ), (("App Volume (Mn)", "SUM(AppLedger[volume_mn])", "#,0"),)),
+    Dataset("SeasonalPattern", "seasonality", (
+        ("month", "int64", "Int64.Type"), ("month_name", "string", "type text"),
+        ("mean_reported_volume_mn", "double", "type number"),
+        ("years_observed", "int64", "Int64.Type"),
+    ), (("Typical Month (Mn)", "SUM(SeasonalPattern[mean_reported_volume_mn])", "#,0"),)),
+)
+
+
+def tmdl(dataset: Dataset, server: str, database: str) -> str:
+    lines = [f"table {dataset.name}", ""]
+    for label, dax, display in dataset.measures:
+        lines.extend((f"\tmeasure '{label}' = {dax}", f"\t\tformatString: {display}", ""))
+    for label, dtype, _ in dataset.columns:
+        lines.extend((f"\tcolumn {label}", f"\t\tdataType: {dtype}",
+                      "\t\tsummarizeBy: none", f"\t\tsourceColumn: {label}", ""))
+    types = ", ".join(f'{{"{name}", {mtype}}}' for name, _, mtype in dataset.columns)
+    lines.extend((f"\tpartition {dataset.name} = m", "\t\tmode: import", "\t\tsource =",
+                  "\t\t\t\tlet",
+                  f'\t\t\t\t    Rows = MySQL.Database({json.dumps(server)}, {json.dumps(database)}, [Query="SELECT * FROM {dataset.sql_table}"]),',
+                  f"\t\t\t\t    Columns = Table.TransformColumnTypes(Rows, {{{types}}})",
+                  "\t\t\t\tin", "\t\t\t\t    Columns", ""))
     return "\n".join(lines)
 
 
-def build_model(server: str, database: str) -> None:
-    write_json(MODEL / ".platform", {
+def semantic_model(server: str, database: str) -> None:
+    folder = OUTPUT / f"{TITLE}.SemanticModel"
+    put_json(folder / ".platform", {
         "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
-        "metadata": {"type": "SemanticModel", "displayName": NAME},
-        "config": {"version": "2.0", "logicalId": str(uuid.uuid5(uuid.NAMESPACE_DNS, "upi.market.analysis.model"))},
+        "metadata": {"type": "SemanticModel", "displayName": TITLE},
+        "config": {"version": "2.0", "logicalId": str(uuid.uuid5(NAMESPACE, "model"))},
     })
-    write_json(MODEL / "definition.pbism", {
-        "$schema": f"{SCHEMA_ROOT}/semanticModel/definitionProperties/1.0.0/schema.json",
-        "version": "4.2", "settings": {},
-    })
-    definition = MODEL / "definition"
+    put_json(folder / "definition.pbism", {"$schema": schema("semanticModel/definitionProperties", "1.0.0"),
+                                           "version": "4.2", "settings": {}})
+    definition = folder / "definition"
     definition.mkdir(parents=True, exist_ok=True)
     (definition / "database.tmdl").write_text("database\n\tcompatibilityLevel: 1550\n", encoding="utf-8")
-    model = ["model Model", "\tculture: en-US", "\tdefaultPowerBIDataSourceVersion: powerBI_V3",
-             "\tsourceQueryCulture: en-US", ""]
-    model += [f"ref table {name}" for name in TABLES]
-    (definition / "model.tmdl").write_text("\n".join(model) + "\n", encoding="utf-8")
-    for name, (file_name, columns, measures) in TABLES.items():
-        path = definition / "tables" / f"{name}.tmdl"
+    references = "\n".join(f"ref table {dataset.name}" for dataset in DATASETS)
+    (definition / "model.tmdl").write_text(
+        "model Model\n\tculture: en-US\n\tdefaultPowerBIDataSourceVersion: powerBI_V3\n"
+        f"\tsourceQueryCulture: en-US\n\n{references}\n", encoding="utf-8")
+    for dataset in DATASETS:
+        path = definition / "tables" / f"{dataset.name}.tmdl"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(table_tmdl(name, file_name.removesuffix(".csv"), columns, measures,
-                                   server, database), encoding="utf-8")
+        path.write_text(tmdl(dataset, server, database), encoding="utf-8")
 
 
-def field(table: str, property_name: str, kind: str) -> dict:
-    return {kind: {"Expression": {"SourceRef": {"Entity": table}}, "Property": property_name}}
+def binding(table: str, item: str, is_measure: bool = False) -> dict:
+    kind = "Measure" if is_measure else "Column"
+    return {"field": {kind: {"Expression": {"SourceRef": {"Entity": table}}, "Property": item}},
+            "queryRef": f"{table}.{item}", "nativeQueryRef": item}
 
 
-def projection(table: str, property_name: str, kind: str) -> dict:
-    query_ref = f"{table}.{property_name}"
-    return {"field": field(table, property_name, kind), "queryRef": query_ref,
-            "nativeQueryRef": property_name}
+@dataclass
+class Sheet:
+    name: str
+    slug: str
+    visuals: list[dict] = field(default_factory=list)
+
+    def add(self, label: str, kind: str, box: tuple[int, int, int, int],
+            *, category=None, value=None, series=None, text=None, size=13) -> None:
+        x, y, width, height = box
+        visual = {"visualType": kind}
+        roles = {}
+        if category:
+            roles["Category" if kind != "slicer" else "Values"] = {"projections": [binding(*category)]}
+        if value:
+            roles["Values" if kind == "card" else "Y"] = {"projections": [binding(*value)]}
+        if series:
+            roles["Series"] = {"projections": [binding(*series)]}
+        if roles:
+            visual["query"] = {"queryState": roles}
+            visual["drillFilterOtherVisuals"] = True
+        if text is not None:
+            visual["objects"] = {"general": [{"properties": {"paragraphs": [{
+                "textRuns": [{"value": text, "textStyle": {
+                    "fontFamily": "Aptos Display", "fontSize": f"{size}pt",
+                    "fontWeight": "bold" if size >= 18 else "normal"}}],
+                "horizontalTextAlignment": "left"}]}}]}
+        self.visuals.append({
+            "$schema": schema("report/definition/visualContainer", "2.2.0"),
+            "name": stable_id(f"{self.slug}/{label}"),
+            "position": {"x": x, "y": y, "z": len(self.visuals) + 1,
+                         "height": height, "width": width},
+            "visual": visual,
+        })
 
 
-def visual(name: str, visual_type: str, x: int, y: int, w: int, h: int,
-           category: tuple | None = None, measure: tuple | None = None,
-           series: tuple | None = None) -> dict:
-    item = {
-        "$schema": f"{SCHEMA_ROOT}/report/definition/visualContainer/2.2.0/schema.json",
-        "name": name, "position": {"x": x, "y": y, "z": 1, "height": h, "width": w},
-        "visual": {"visualType": visual_type},
-    }
-    state = {}
-    if category:
-        state["Category"] = {"projections": [projection(*category)]}
-    if measure:
-        state["Values" if visual_type == "card" else "Y"] = {"projections": [projection(*measure)]}
-    if series:
-        state["Series"] = {"projections": [projection(*series)]}
-    if state:
-        item["visual"]["query"] = {"queryState": state}
-    return item
+def report_pages() -> list[Sheet]:
+    momentum = Sheet("01  |  Market Momentum", "momentum")
+    momentum.add("headline", "textbox", (38, 20, 900, 52), text="UPI Market Analysis", size=30)
+    momentum.add("deck", "textbox", (40, 78, 930, 35), text="Four years of reported app activity  •  Explore by year", size=13)
+    momentum.add("year", "slicer", (1035, 28, 195, 80), category=("Market", "year"))
+    momentum.add("total label", "textbox", (45, 130, 340, 30), text="TRANSACTIONS · MILLION", size=12)
+    momentum.add("total", "card", (45, 162, 350, 103), value=("Market", "Transactions (Mn)", True))
+    momentum.add("peak label", "textbox", (445, 130, 340, 30), text="PEAK MONTH · MILLION", size=12)
+    momentum.add("peak", "card", (445, 162, 350, 103), value=("Market", "Peak Month (Mn)", True))
+    momentum.add("apps label", "textbox", (845, 130, 350, 30), text="AVERAGE LISTED APPS", size=12)
+    momentum.add("apps", "card", (845, 162, 350, 103), value=("Market", "Active Apps", True))
+    momentum.add("chart label", "textbox", (45, 293, 950, 36), text="Monthly transactions", size=18)
+    momentum.add("volume trend", "areaChart", (45, 336, 1160, 320),
+                 category=("Market", "date"), value=("Market", "Transactions (Mn)", True))
+    momentum.add("foot", "textbox", (45, 672, 1150, 25),
+                 text="Source: NPCI UPI Apps workbooks  •  Units: million transactions  •  Analysis: Rakesh", size=10)
+
+    landscape = Sheet("02  |  Competitive Landscape", "landscape")
+    landscape.add("headline", "textbox", (38, 20, 940, 52), text="The competitive landscape", size=29)
+    landscape.add("deck", "textbox", (40, 78, 950, 32),
+                  text="Select an app or year to examine how the mix changes", size=13)
+    landscape.add("year", "slicer", (1035, 28, 195, 80), category=("Competitors", "year"))
+    landscape.add("share label", "textbox", (45, 132, 700, 32), text="Share of reported app volume", size=18)
+    landscape.add("share trend", "lineChart", (45, 173, 740, 285),
+                  category=("Competitors", "date"), value=("Competitors", "Average Share", True),
+                  series=("Competitors", "app_group"))
+    landscape.add("mix label", "textbox", (825, 132, 380, 32), text="Volume by app group", size=18)
+    landscape.add("app mix", "barChart", (825, 173, 380, 285),
+                  category=("Competitors", "app_group"), value=("Competitors", "App Transactions (Mn)", True))
+    landscape.add("yearly label", "textbox", (45, 481, 800, 32), text="Annual contribution", size=18)
+    landscape.add("annual bars", "clusteredColumnChart", (45, 522, 1160, 151),
+                  category=("Competitors", "year"), value=("Competitors", "App Transactions (Mn)", True),
+                  series=("Competitors", "app_group"))
+    landscape.add("foot", "textbox", (45, 680, 1140, 22),
+                  text="Shares use the sum of the apps listed by NPCI each month.", size=10)
+
+    explorer = Sheet("03  |  App Explorer", "explorer")
+    explorer.add("headline", "textbox", (38, 20, 900, 52), text="Explore every listed app", size=29)
+    explorer.add("deck", "textbox", (40, 78, 950, 32),
+                 text="Use the app and year controls to focus the view", size=13)
+    explorer.add("year", "slicer", (45, 127, 255, 88), category=("AppLedger", "year"))
+    explorer.add("app", "slicer", (328, 127, 410, 88), category=("AppLedger", "app"))
+    explorer.add("total", "card", (830, 127, 360, 92), value=("AppLedger", "App Volume (Mn)", True))
+    explorer.add("trend label", "textbox", (45, 241, 700, 35), text="Selected app trajectory", size=18)
+    explorer.add("trend", "lineChart", (45, 282, 760, 370),
+                 category=("AppLedger", "date"), value=("AppLedger", "App Volume (Mn)", True))
+    explorer.add("ranking label", "textbox", (840, 241, 350, 35), text="App volume ranking", size=18)
+    explorer.add("ranking", "barChart", (840, 282, 355, 370),
+                 category=("AppLedger", "app"), value=("AppLedger", "App Volume (Mn)", True))
+    explorer.add("foot", "textbox", (45, 670, 1140, 25),
+                 text="App names standardized by Rakesh; source workbooks remain NPCI's.", size=10)
+
+    rhythm = Sheet("04  |  Monthly Rhythm", "rhythm")
+    rhythm.add("headline", "textbox", (38, 20, 900, 52), text="The monthly rhythm", size=29)
+    rhythm.add("deck", "textbox", (40, 78, 1100, 32),
+               text="Average reported transactions for each calendar month, 2022–2025", size=13)
+    rhythm.add("chart label", "textbox", (45, 135, 950, 35), text="A four-year view of seasonality", size=18)
+    rhythm.add("bars", "clusteredColumnChart", (45, 185, 1150, 362),
+               category=("SeasonalPattern", "month"),
+               value=("SeasonalPattern", "Typical Month (Mn)", True))
+    rhythm.add("note one", "textbox", (48, 574, 1120, 36),
+               text="Reading the chart: each bar averages the same month across four years.", size=13)
+    rhythm.add("note two", "textbox", (48, 618, 1120, 36),
+               text="These are reported app totals, not NPCI's separate network-wide UPI total.", size=13)
+    rhythm.add("foot", "textbox", (45, 674, 1100, 24), text="Data: NPCI  •  Preparation, analysis and report: Rakesh", size=10)
+    return [momentum, landscape, explorer, rhythm]
 
 
-def textbox(name: str, text: str, x: int, y: int, w: int, h: int, size: int) -> dict:
-    item = visual(name, "textbox", x, y, w, max(h, int(size * 1.6 + 17)))
-    item["visual"]["objects"] = {"general": [{"properties": {"paragraphs": [{
-        "textRuns": [{"value": text, "textStyle": {
-            "fontFamily": "Segoe UI", "fontSize": f"{size}pt",
-            "fontStyle": "normal", "fontWeight": "bold" if size >= 18 else "normal",
-        }}], "horizontalTextAlignment": "left",
-    }]}}]}
-    return item
-
-
-PAGES = [
-    ("pulse", "Market Overview", [
-        textbox("pulse_title", "UPI Market Analysis", 40, 24, 700, 55, 28),
-        textbox("pulse_note", "Reported UPI app volumes, January 2022 to December 2025", 42, 90, 1100, 35, 12),
-        textbox("pulse_volume_label", "December 2025 volume (million)", 45, 130, 400, 35, 13),
-        visual("pulse_volume_card", "card", 45, 168, 350, 110, measure=("MarketMonthly", "Latest Reported Volume (Mn)", "Measure")),
-        textbox("pulse_top3_label", "December 2025 top-three share", 445, 130, 400, 35, 13),
-        visual("pulse_top3_card", "card", 445, 168, 350, 110, measure=("MarketMonthly", "Latest Top Three Share", "Measure")),
-        textbox("pulse_volume_chart_label", "Reported app transactions (million)", 45, 300, 560, 35, 15),
-        visual("pulse_volume_chart", "lineChart", 45, 345, 560, 312, category=("MarketMonthly", "date", "Column"), measure=("MarketMonthly", "Reported Volume (Mn)", "Measure")),
-        textbox("pulse_concentration_label", "Top-three share over time", 660, 300, 570, 35, 15),
-        visual("pulse_concentration", "lineChart", 660, 345, 570, 312, category=("MarketMonthly", "date", "Column"), measure=("MarketMonthly", "Top Three Share", "Measure")),
-    ]),
-    ("competition", "Competition", [
-        textbox("competition_title", "App competition", 40, 24, 700, 55, 28),
-        textbox("competition_note", "Share of reported app volume", 42, 90, 750, 35, 12),
-        textbox("competition_phonepe_label", "PhonePe share, December 2025", 45, 130, 400, 35, 13),
-        visual("competition_phonepe_card", "card", 45, 170, 350, 110, measure=("MarketMonthly", "Latest PhonePe Share", "Measure")),
-        textbox("competition_google_label", "Google Pay share, December 2025", 445, 130, 400, 35, 13),
-        visual("competition_google_card", "card", 445, 170, 350, 110, measure=("MarketMonthly", "Latest Google Pay Share", "Measure")),
-        textbox("competition_share_label", "Leading app shares by month", 45, 300, 550, 35, 15),
-        visual("competition_share", "lineChart", 45, 345, 560, 312, category=("LeadersMonthly", "date", "Column"), measure=("LeadersMonthly", "App Share", "Measure"), series=("LeadersMonthly", "app_group", "Column")),
-        textbox("competition_volume_label", "Annual app volume by group (million)", 660, 300, 580, 35, 15),
-        visual("competition_volume", "clusteredColumnChart", 660, 345, 570, 312, category=("LeadersYear", "year", "Column"), measure=("LeadersYear", "Annual App Volume (Mn)", "Measure"), series=("LeadersYear", "app_group", "Column")),
-    ]),
-    ("seasonality", "Seasonality", [
-        textbox("seasonality_title", "Seasonality", 40, 24, 900, 55, 28),
-        textbox("seasonality_note", "Average reported app volume across the four complete years", 42, 90, 900, 35, 12),
-        textbox("seasonality_chart_label", "Mean monthly transactions (million)", 45, 140, 700, 35, 15),
-        visual("seasonality_chart", "clusteredColumnChart", 45, 180, 1170, 365, category=("Seasonality", "month", "Column"), measure=("Seasonality", "Mean Monthly Volume (Mn)", "Measure")),
-        textbox("seasonality_caution1", "Shares use the sum of reported app volumes, not the separate official UPI total.", 45, 570, 1150, 35, 12),
-        textbox("seasonality_caution2", "Source: NPCI UPI Ecosystem Statistics. Analysis and report by Rakesh.", 45, 610, 1150, 35, 12),
-    ]),
-]
-
-
-def build_report() -> None:
-    page_ids = {
-        short_name: "ReportSection" + uuid.uuid5(uuid.NAMESPACE_DNS, f"upi.market.analysis.{short_name}").hex[:20]
-        for short_name, _, _ in PAGES
-    }
-    write_json(BASE / f"{NAME}.pbip", {
+def report_definition() -> None:
+    report = OUTPUT / f"{TITLE}.Report"
+    definition = report / "definition"
+    put_json(OUTPUT / f"{TITLE}.pbip", {
         "$schema": "https://developer.microsoft.com/json-schemas/fabric/pbip/pbipProperties/1.0.0/schema.json",
-        "version": "1.0", "artifacts": [{"report": {"path": f"{NAME}.Report"}}],
+        "version": "1.0", "artifacts": [{"report": {"path": f"{TITLE}.Report"}}],
         "settings": {"enableAutoRecovery": True},
     })
-    write_json(REPORT / ".platform", {
+    put_json(report / ".platform", {
         "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
-        "metadata": {"type": "Report", "displayName": NAME},
-        "config": {"version": "2.0", "logicalId": str(uuid.uuid5(uuid.NAMESPACE_DNS, "upi.market.analysis.report"))},
+        "metadata": {"type": "Report", "displayName": TITLE},
+        "config": {"version": "2.0", "logicalId": str(uuid.uuid5(NAMESPACE, "report"))},
     })
-    write_json(REPORT / "definition.pbir", {
-        "$schema": f"{SCHEMA_ROOT}/report/definitionProperties/2.0.0/schema.json",
-        "version": "4.0", "datasetReference": {"byPath": {"path": f"../{NAME}.SemanticModel"}},
+    put_json(report / "definition.pbir", {
+        "$schema": schema("report/definitionProperties", "2.0.0"), "version": "4.0",
+        "datasetReference": {"byPath": {"path": f"../{TITLE}.SemanticModel"}},
     })
-    definition = REPORT / "definition"
-    write_json(definition / "version.json", {
-        "$schema": f"{SCHEMA_ROOT}/report/definition/versionMetadata/1.0.0/schema.json",
-        "version": "2.0.0",
+    theme_name = "RakeshUPIStudio.json"
+    put_json(report / "StaticResources" / "RegisteredResources" / theme_name, {
+        "name": theme_name, "dataColors": ["#0A7F86", "#E56D4E", "#334F89", "#E5AF40",
+                                            "#48A6A0", "#8D70B1", "#18334B", "#C77759"],
+        "background": "#F7F9F9", "foreground": "#17334A", "tableAccent": "#0A7F86",
+        "firstLevelElements": "#17334A", "secondLevelElements": "#456171",
+        "thirdLevelElements": "#DCE8E8", "fourthLevelElements": "#66808D",
+        "secondaryBackground": "#EAF2F1", "good": "#0A7F86",
+        "neutral": "#E5AF40", "bad": "#D6645A",
+        "textClasses": {
+            "title": {"fontFace": "Aptos Display", "fontSize": 14, "color": "#17334A"},
+            "label": {"fontFace": "Aptos", "fontSize": 10, "color": "#456171"},
+            "callout": {"fontFace": "Aptos Display", "fontSize": 34, "color": "#0A7F86"},
+            "header": {"fontFace": "Aptos", "fontSize": 11, "color": "#17334A"},
+        },
     })
-    write_json(definition / "report.json", {
-        "$schema": f"{SCHEMA_ROOT}/report/definition/report/3.0.0/schema.json",
-        "themeCollection": {}, "settings": {"useStylableVisualContainerHeader": True},
+    put_json(definition / "version.json", {
+        "$schema": schema("report/definition/versionMetadata", "1.0.0"), "version": "2.0.0"})
+    put_json(definition / "report.json", {
+        "$schema": schema("report/definition/report", "3.0.0"),
+        "themeCollection": {"customTheme": {"name": theme_name, "type": "RegisteredResources"}},
+        "resourcePackages": [{"name": "RegisteredResources", "type": "RegisteredResources",
+                              "items": [{"name": theme_name, "path": theme_name,
+                                         "type": "CustomTheme"}]}],
+        "settings": {"defaultFilterActionIsDataFilter": True,
+                     "useStylableVisualContainerHeader": True, "useEnhancedTooltips": True},
     })
-    write_json(definition / "pages" / "pages.json", {
-        "$schema": f"{SCHEMA_ROOT}/report/definition/pagesMetadata/1.0.0/schema.json",
-        "pageOrder": [page_ids[short_name] for short_name, _, _ in PAGES],
-        "activePageName": page_ids["pulse"],
+    pages = report_pages()
+    put_json(definition / "pages" / "pages.json", {
+        "$schema": schema("report/definition/pagesMetadata", "1.0.0"),
+        "pageOrder": [stable_id(page.slug) for page in pages],
+        "activePageName": stable_id(pages[0].slug),
     })
-    for short_name, title, visuals in PAGES:
-        page_id = page_ids[short_name]
-        page_dir = definition / "pages" / page_id
-        write_json(page_dir / "page.json", {
-            "$schema": f"{SCHEMA_ROOT}/report/definition/page/2.0.0/schema.json",
-            "name": page_id, "displayName": title, "displayOption": "FitToPage",
-            "height": 720, "width": 1280,
+    for page in pages:
+        base = definition / "pages" / stable_id(page.slug)
+        put_json(base / "page.json", {
+            "$schema": schema("report/definition/page", "2.0.0"),
+            "name": stable_id(page.slug), "displayName": page.name,
+            "displayOption": "FitToPage", "height": 720, "width": 1280,
         })
-        for item in visuals:
-            item["name"] = uuid.uuid5(uuid.NAMESPACE_DNS, f"upi.market.analysis.{short_name}.{item['name']}").hex[:20]
-            write_json(page_dir / "visuals" / item["name"] / "visual.json", item)
+        for item in page.visuals:
+            put_json(base / "visuals" / item["name"] / "visual.json", item)
 
 
 def main() -> None:
@@ -236,20 +288,19 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=3306)
     parser.add_argument("--database", default="upi_market_analysis")
     args = parser.parse_args()
-    server = f"{args.host}:{args.port}"
-    for file_name, _, _ in TABLES.values():
-        if not (ROOT / "data" / "processed" / file_name).exists():
-            raise FileNotFoundError(f"Run build.py first: {file_name}")
-    build_model(server, args.database)
-    build_report()
-    archive = BASE / f"{NAME} - Power BI project.zip"
-    with ZipFile(archive, "w", ZIP_DEFLATED) as bundle:
-        for file in BASE.rglob("*"):
-            if file.is_file() and file != archive:
-                bundle.write(file, file.relative_to(BASE))
-    print(f"Built {BASE / (NAME + '.pbip')}")
-    print(f"Packaged {archive}")
-    print("Power BI Desktop is required to refresh and visually validate the report.")
+    for dataset in DATASETS:
+        if not (ROOT / "data" / "processed" / f"{dataset.sql_table}.csv").is_file():
+            parser.error(f"Run build.py first: missing {dataset.sql_table}.csv")
+    semantic_model(f"{args.host}:{args.port}", args.database)
+    report_definition()
+    archive = OUTPUT / f"{TITLE} - Power BI project.zip"
+    with ZipFile(archive, "w", ZIP_DEFLATED) as zip_file:
+        for path in sorted(OUTPUT.rglob("*")):
+            if path.is_file() and path != archive:
+                zip_file.write(path, path.relative_to(OUTPUT))
+        zip_file.write(ROOT / "LICENSE", "LICENSE")
+    print(f"Created {OUTPUT / (TITLE + '.pbip')} and {archive}")
+    print("Refresh and review the four report pages in Power BI Desktop.")
 
 
 if __name__ == "__main__":

@@ -1,8 +1,4 @@
-"""Build an app-competition dataset from NPCI's monthly UPI app workbooks.
-
-Usage: python build.py --source path/to/monthly/xlsx/files
-"""
-
+"""Prepare month, app, ranking and seasonality tables from NPCI UPI Apps files."""
 from __future__ import annotations
 
 import argparse
@@ -10,191 +6,147 @@ import csv
 import re
 from calendar import month_abbr
 from collections import defaultdict
+from datetime import date
 from pathlib import Path
 
 from openpyxl import load_workbook
 
-
-ROOT = Path(__file__).resolve().parent
-OUTPUT = ROOT / "data" / "processed"
-FILE_DATE = re.compile(r"(20\d{2})-([A-Za-z]{3})\.xlsx$")
-MONTH_NUMBER = {name.lower(): month for month, name in enumerate(month_abbr) if name}
+HOME = Path(__file__).resolve().parent
+DEST = HOME / "data" / "processed"
+APP_ALIASES = {"phone pe": "PhonePe", "phonepe": "PhonePe", "paytm payments bank app": "Paytm",
+               "paytm (ocl)": "Paytm", "paytm (ocl )": "Paytm",
+               "cred": "CRED", "whatsapp": "WhatsApp Pay"}
 LEADERS = ("PhonePe", "Google Pay", "Paytm")
 
 
-def parse_number(value: object) -> float | None:
-    """Keep a visibly unreadable source cell missing instead of making it zero."""
-    if value is None or str(value).strip() == "" or set(str(value).strip()) == {"#"}:
+def as_number(value):
+    text = "" if value is None else str(value).strip().replace(",", "")
+    if not text or set(text) == {"#"}:
         return None
-    if str(value).strip() in {"-", "–", "—"}:
-        return 0.0
-    return float(str(value).replace(",", "").strip())
+    return 0.0 if text in {"-", "–", "—"} else float(text)
 
 
-def app_name(value: object) -> str:
-    name = re.sub(r"\s*#\s*$", "", str(value).strip())
-    names = {
-        "Phone Pe": "PhonePe", "Phonepe": "PhonePe",
-        "Paytm Payments Bank App": "Paytm", "Paytm (OCL)": "Paytm",
-        "Paytm (OCL )": "Paytm", "Cred": "CRED",
-        "WhatsApp": "WhatsApp Pay", "Whatsapp": "WhatsApp Pay",
-    }
-    return names.get(name, name)
-
-
-def read_workbook(path: Path) -> list[dict]:
-    match = FILE_DATE.search(path.name)
-    if match is None:
-        raise ValueError(f"Workbook filename has no year/month: {path.name}")
-    year = int(match.group(1))
-    month = MONTH_NUMBER[match.group(2).lower()]
-    date = f"{year:04d}-{month:02d}-01"
-    workbook = load_workbook(path, read_only=True, data_only=True)
-    header_index = None
-    total_column = None
-    observations = []
+def read_month(path):
+    match = re.search(r"(20\d{2})-([A-Za-z]{3})\.xlsx$", path.name, re.I)
+    if not match:
+        raise ValueError(f"Expected YYYY-Mon in {path.name}")
+    month_codes = {label.lower(): i for i, label in enumerate(month_abbr) if label}
+    period = date(int(match[1]), month_codes[match[2].lower()], 1)
+    book = load_workbook(path, read_only=True, data_only=True)
+    found = []
+    total_at = None
     try:
-        for excel_row, row in enumerate(workbook.active.iter_rows(values_only=True), start=1):
-            if header_index is None:
-                if "Application Name" in row:
-                    labels = [str(cell).strip() if cell is not None else "" for cell in row]
-                    total_column = labels.index("Total")
-                    if total_column not in (8, 10):
-                        raise ValueError(f"Unexpected table shape in {path.name}")
-                    header_index = excel_row
+        for line, cells in enumerate(book.active.iter_rows(values_only=True), 1):
+            if total_at is None:
+                labels = [str(cell).strip() if cell is not None else "" for cell in cells]
+                if "Application Name" in labels:
+                    total_at = labels.index("Total")
                 continue
-            serial = str(row[0]).strip() if row and row[0] is not None else ""
-            if not re.fullmatch(r"\d+(?:\.0)?", serial):
+            if not cells or cells[0] is None or not re.fullmatch(r"\d+(?:\.0)?", str(cells[0]).strip()):
                 continue
-            if len(row) <= total_column + 1 or row[1] is None:
-                raise ValueError(f"Incomplete app record at {path.name}:{excel_row}")
-            volume = parse_number(row[total_column])
-            value = parse_number(row[total_column + 1])
+            if len(cells) <= total_at + 1 or cells[1] is None:
+                raise ValueError(f"Incomplete source row {path.name}:{line}")
+            volume = as_number(cells[total_at])
             if volume is None:
-                raise ValueError(f"Missing transaction volume at {path.name}:{excel_row}")
-            observations.append({
-                "date": date, "year": year, "month": month,
-                "app": app_name(row[1]), "volume_mn": volume,
-                "value_cr": value, "source_file": path.name,
-                "source_row": excel_row,
-            })
+                raise ValueError(f"Unreadable volume at {path.name}:{line}")
+            label = re.sub(r"\s*#\s*$", "", str(cells[1]).strip())
+            found.append((period, APP_ALIASES.get(label.lower(), label), volume,
+                          as_number(cells[total_at + 1])))
     finally:
-        workbook.close()
-    if not observations:
-        raise ValueError(f"No data rows in {path.name}")
-    return observations
+        book.close()
+    if not found:
+        raise ValueError(f"No app entries in {path.name}")
+    return found
 
 
-def write_csv(name: str, fields: list[str], records: list[dict]) -> None:
-    OUTPUT.mkdir(parents=True, exist_ok=True)
-    with (OUTPUT / name).open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields)
-        writer.writeheader()
-        writer.writerows(records)
+def prepare(files):
+    records = defaultdict(list)
+    for path in files:
+        for period, app, volume, value in read_month(path):
+            records[(period, app)].append((volume, value))
+    periods = {period for period, _ in records}
+    if len(periods) != len(files):
+        raise ValueError("Expected one workbook for each month")
 
+    app_rows = []
+    by_period = defaultdict(list)
+    for (period, app), amounts in sorted(records.items()):
+        complete = all(value is not None for _, value in amounts)
+        row = {"date": period.isoformat(), "year": period.year, "month": period.month,
+               "app": app, "volume_mn": round(sum(volume for volume, _ in amounts), 2),
+               "value_cr": round(sum(value for _, value in amounts if value is not None), 2) if complete else None,
+               "value_complete": int(complete)}
+        app_rows.append(row)
+        by_period[period].append(row)
 
-def build(source: Path) -> None:
-    files = sorted(source.glob("*.xlsx"))
-    if not files:
-        raise FileNotFoundError(f"No .xlsx workbooks found in {source}")
-    raw = [observation for path in files for observation in read_workbook(path)]
-    dates = {row["date"] for row in raw}
-    if len(dates) != len(files):
-        raise ValueError("Expected one source workbook per month")
-
-    # A few workbooks list the same app more than once. Combine those rows.
-    app_totals: dict[tuple[str, str], dict] = {}
-    for row in raw:
-        key = (row["date"], row["app"])
-        if key not in app_totals:
-            app_totals[key] = {
-                "date": row["date"], "year": row["year"], "month": row["month"],
-                "app": row["app"], "volume_mn": 0.0, "value_cr": 0.0,
-                "value_complete": 1,
-            }
-        item = app_totals[key]
-        item["volume_mn"] += row["volume_mn"]
-        if row["value_cr"] is None:
-            item["value_complete"] = 0
-        else:
-            item["value_cr"] += row["value_cr"]
-    app_month = []
-    for _, item in sorted(app_totals.items()):
-        item["volume_mn"] = round(item["volume_mn"], 2)
-        item["value_cr"] = round(item["value_cr"], 2) if item["value_complete"] else None
-        app_month.append(item)
-
-    by_date: dict[str, list[dict]] = defaultdict(list)
-    for item in app_month:
-        by_date[item["date"]].append(item)
-    month_summary = []
-    leaders_monthly = []
-    for date, apps in sorted(by_date.items()):
-        total = sum(row["volume_mn"] for row in apps)
+    monthly, leader_rows = [], []
+    for period, members in sorted(by_period.items()):
+        total = sum(row["volume_mn"] for row in members)
         if total <= 0:
-            raise ValueError(f"Zero market volume for {date}")
-        names = {row["app"]: row["volume_mn"] for row in apps}
-        named = sorted((row["volume_mn"] for row in apps if row["app"].lower() not in {"other", "others"}), reverse=True)
-        shares = {name: names.get(name, 0.0) / total for name in LEADERS}
-        month_summary.append({
-            "date": date, "year": int(date[:4]), "month": int(date[5:7]),
-            "reported_volume_mn": round(total, 2),
-            "listed_apps": sum(row["app"].lower() not in {"other", "others"} for row in apps),
-            "top3_share": round(sum(named[:3]) / total, 6),
-            "phonepe_share": round(shares["PhonePe"], 6),
-            "googlepay_share": round(shares["Google Pay"], 6),
-            "paytm_share": round(shares["Paytm"], 6),
-            "missing_value_apps": sum(not row["value_complete"] for row in apps),
-        })
-        leader_volume = 0.0
-        for name in LEADERS:
-            volume = names.get(name, 0.0)
-            leader_volume += volume
-            leaders_monthly.append({"date": date, "year": int(date[:4]), "app_group": name,
-                                    "volume_mn": round(volume, 2), "share": round(volume / total, 6)})
-        other = total - leader_volume
-        leaders_monthly.append({"date": date, "year": int(date[:4]), "app_group": "All other apps",
-                                "volume_mn": round(other, 2), "share": round(other / total, 6)})
+            raise ValueError(f"No reported volume for {period}")
+        volumes = {row["app"]: row["volume_mn"] for row in members}
+        named = sorted((row["volume_mn"] for row in members
+                        if row["app"].lower() not in {"other", "others"}), reverse=True)
+        monthly.append({"date": period.isoformat(), "year": period.year, "month": period.month,
+                        "reported_volume_mn": round(total, 2), "listed_apps": len(named),
+                        "top3_share": round(sum(named[:3]) / total, 6),
+                        "phonepe_share": round(volumes.get("PhonePe", 0) / total, 6),
+                        "googlepay_share": round(volumes.get("Google Pay", 0) / total, 6),
+                        "paytm_share": round(volumes.get("Paytm", 0) / total, 6),
+                        "missing_value_apps": sum(1 for row in members if not row["value_complete"])})
+        leader_total = 0
+        for app in LEADERS:
+            amount = volumes.get(app, 0)
+            leader_total += amount
+            leader_rows.append({"date": period.isoformat(), "year": period.year,
+                                "app_group": app, "volume_mn": round(amount, 2),
+                                "share": round(amount / total, 6)})
+        remainder = total - leader_total
+        leader_rows.append({"date": period.isoformat(), "year": period.year,
+                            "app_group": "All other apps", "volume_mn": round(remainder, 2),
+                            "share": round(remainder / total, 6)})
 
-    yearly_totals: dict[tuple[int, str], float] = defaultdict(float)
-    yearly_market: dict[int, float] = defaultdict(float)
-    for row in leaders_monthly:
-        yearly_totals[(row["year"], row["app_group"])] += row["volume_mn"]
-        yearly_market[row["year"]] += row["volume_mn"]
-    yearly = [
-        {"year": year, "app_group": group, "volume_mn": round(volume, 2),
-         "share": round(volume / yearly_market[year], 6)}
-        for (year, group), volume in sorted(yearly_totals.items())
-    ]
-    by_calendar_month: dict[int, list[float]] = defaultdict(list)
-    for row in month_summary:
-        by_calendar_month[row["month"]].append(row["reported_volume_mn"])
-    seasonality = [
-        {"month": month, "month_name": month_abbr[month],
-         "mean_reported_volume_mn": round(sum(values) / len(values), 2),
-         "years_observed": len(values)}
-        for month, values in sorted(by_calendar_month.items())
-    ]
-    latest = max(dates)
-    latest_total = next(row["reported_volume_mn"] for row in month_summary if row["date"] == latest)
-    ranking = [
-        {"rank": rank, "app": row["app"], "volume_mn": row["volume_mn"],
-         "share": round(row["volume_mn"] / latest_total, 6), "date": latest}
-        for rank, row in enumerate(sorted(by_date[latest], key=lambda item: item["volume_mn"], reverse=True)[:20], start=1)
-    ]
+    annual_groups = defaultdict(float)
+    annual_totals = defaultdict(float)
+    for row in leader_rows:
+        annual_groups[(row["year"], row["app_group"])] += row["volume_mn"]
+        annual_totals[row["year"]] += row["volume_mn"]
+    annual = [{"year": year, "app_group": app, "volume_mn": round(amount, 2),
+               "share": round(amount / annual_totals[year], 6)}
+              for (year, app), amount in sorted(annual_groups.items())]
 
-    write_csv("app_month.csv", ["date", "year", "month", "app", "volume_mn", "value_cr", "value_complete"], app_month)
-    write_csv("market_month.csv", list(month_summary[0]), month_summary)
-    write_csv("leaders_month.csv", list(leaders_monthly[0]), leaders_monthly)
-    write_csv("leaders_year.csv", list(yearly[0]), yearly)
-    write_csv("seasonality.csv", list(seasonality[0]), seasonality)
-    write_csv("latest_top20.csv", list(ranking[0]), ranking)
-    print(f"Built {len(app_month)} app-month records from {len(files)} NPCI workbooks")
-    print(f"Latest month: {latest}; reported app volume: {latest_total:,.2f} million")
+    seasonal_groups = defaultdict(list)
+    for row in monthly:
+        seasonal_groups[row["month"]].append(row["reported_volume_mn"])
+    seasonal = [{"month": month, "month_name": month_abbr[month],
+                 "mean_reported_volume_mn": round(sum(values) / len(values), 2),
+                 "years_observed": len(values)}
+                for month, values in sorted(seasonal_groups.items())]
+    newest = max(by_period)
+    ranked = sorted(by_period[newest], key=lambda row: row["volume_mn"], reverse=True)[:20]
+    total = next(row["reported_volume_mn"] for row in monthly if row["date"] == newest.isoformat())
+    top20 = [{"rank": rank, "app": row["app"], "volume_mn": row["volume_mn"],
+              "share": round(row["volume_mn"] / total, 6), "date": newest.isoformat()}
+             for rank, row in enumerate(ranked, 1)]
+    return {"app_month.csv": app_rows, "market_month.csv": monthly,
+            "leaders_month.csv": leader_rows, "leaders_year.csv": annual,
+            "seasonality.csv": seasonal, "latest_top20.csv": top20}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", type=Path, default=HOME / "data" / "raw")
+    paths = sorted(parser.parse_args().source.glob("*.xlsx"))
+    if not paths:
+        raise FileNotFoundError("No NPCI .xlsx workbooks found")
+    DEST.mkdir(parents=True, exist_ok=True)
+    for filename, rows in prepare(paths).items():
+        with (DEST / filename).open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(stream, fieldnames=tuple(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+    print(f"Prepared {len(paths)} months from NPCI workbooks")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, default=ROOT / "data" / "raw",
-                        help="Folder containing NPCI monthly app .xlsx files")
-    build(parser.parse_args().source)
+    main()
