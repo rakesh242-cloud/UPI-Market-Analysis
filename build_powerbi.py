@@ -156,7 +156,7 @@ class Sheet:
 def report_pages() -> list[Sheet]:
     momentum = Sheet("01  |  Market Momentum", "momentum")
     momentum.add("headline", "textbox", (38, 20, 900, 52), text="UPI Market Analysis", size=30)
-    momentum.add("deck", "textbox", (40, 78, 930, 35), text="Four years of reported app activity  •  Explore by year", size=13)
+    momentum.add("deck", "textbox", (40, 78, 930, 35), text="UPI app transactions from 2022 to 2025", size=13)
     momentum.add("year", "slicer", (1035, 28, 195, 80), category=("Market", "year"))
     momentum.add("total label", "textbox", (45, 130, 340, 30), text="TRANSACTIONS · MILLION", size=12)
     momentum.add("total", "card", (45, 162, 350, 103), value=("Market", "Transactions (Mn)", True))
@@ -168,7 +168,7 @@ def report_pages() -> list[Sheet]:
     momentum.add("volume trend", "areaChart", (45, 336, 1160, 320),
                  category=("Market", "date"), value=("Market", "Transactions (Mn)", True))
     momentum.add("foot", "textbox", (45, 672, 1150, 25),
-                 text="Source: NPCI UPI Apps workbooks  •  Units: million transactions  •  Analysis: Rakesh", size=10)
+                 text="Source: NPCI UPI Apps data  •  Transactions shown in millions", size=10)
 
     landscape = Sheet("02  |  Competitive Landscape", "landscape")
     landscape.add("headline", "textbox", (38, 20, 940, 52), text="The competitive landscape", size=29)
@@ -196,25 +196,25 @@ def report_pages() -> list[Sheet]:
     explorer.add("year", "slicer", (45, 127, 255, 88), category=("AppLedger", "year"))
     explorer.add("app", "slicer", (328, 127, 410, 88), category=("AppLedger", "app"))
     explorer.add("total", "card", (830, 127, 360, 92), value=("AppLedger", "App Volume (Mn)", True))
-    explorer.add("trend label", "textbox", (45, 241, 700, 35), text="Selected app trajectory", size=18)
+    explorer.add("trend label", "textbox", (45, 241, 700, 35), text="Monthly volume for the selected app", size=18)
     explorer.add("trend", "lineChart", (45, 282, 760, 370),
                  category=("AppLedger", "date"), value=("AppLedger", "App Volume (Mn)", True))
     explorer.add("ranking label", "textbox", (840, 241, 350, 35), text="App volume ranking", size=18)
     explorer.add("ranking", "barChart", (840, 282, 355, 370),
                  category=("AppLedger", "app"), value=("AppLedger", "App Volume (Mn)", True))
     explorer.add("foot", "textbox", (45, 670, 1140, 25),
-                 text="App names standardized by Rakesh; source workbooks remain NPCI's.", size=10)
+                 text="App names have been standardized for easier comparison. Source: NPCI.", size=10)
 
     rhythm = Sheet("04  |  Monthly Rhythm", "rhythm")
     rhythm.add("headline", "textbox", (38, 20, 900, 52), text="The monthly rhythm", size=29)
     rhythm.add("deck", "textbox", (40, 78, 1100, 32),
                text="Average reported transactions for each calendar month, 2022–2025", size=13)
-    rhythm.add("chart label", "textbox", (45, 135, 950, 35), text="A four-year view of seasonality", size=18)
+    rhythm.add("chart label", "textbox", (45, 135, 950, 35), text="Average volume by month", size=18)
     rhythm.add("bars", "clusteredColumnChart", (45, 185, 1150, 362),
                category=("SeasonalPattern", "month"),
                value=("SeasonalPattern", "Typical Month (Mn)", True))
     rhythm.add("note one", "textbox", (48, 574, 1120, 36),
-               text="Reading the chart: each bar averages the same month across four years.", size=13)
+               text="Each bar averages that month across the four years.", size=13)
     rhythm.add("note two", "textbox", (48, 618, 1120, 36),
                text="These are reported app totals, not NPCI's separate network-wide UPI total.", size=13)
     rhythm.add("foot", "textbox", (45, 674, 1100, 24), text="Data: NPCI  •  Preparation, analysis and report: Rakesh", size=10)
