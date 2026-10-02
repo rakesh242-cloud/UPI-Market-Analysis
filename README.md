@@ -1,6 +1,6 @@
-# Rakesh UPI Market Pulse
+# UPI Market Pulse
 
-An interactive analysis of India's UPI app market by **Rakesh**. The project turns monthly app statistics from the [National Payments Corporation of India (NPCI)](https://www.npci.org.in/what-we-do/upi/upi-ecosystem-statistics) into a browser dashboard, a Power BI project, reusable data tables, and SQL analysis.
+An interactive analysis of India's UPI app market. The project turns monthly app statistics from the [National Payments Corporation of India (NPCI)](https://www.npci.org.in/what-we-do/upi/upi-ecosystem-statistics) into a browser dashboard, a Power BI project, reusable data tables, and SQL analysis.
 
 **[Explore the live dashboard](https://rakesh242-cloud.github.io/rakesh-upi-market-pulse/)** · [Dashboard source](docs/index.html)
 
